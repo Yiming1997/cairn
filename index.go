@@ -148,16 +148,53 @@ func collectFiles(roots []string) ([]string, error) {
 	return files, nil
 }
 
-func BuildIndex(workspace string, roots []string, workers int) (*Index, error) {
-	if workers <= 0 {
-		workers = runtime.GOMAXPROCS(0)
-		if workers > 8 {
-			workers = 8
-		}
-		if workers < 2 {
-			workers = 2
-		}
+const defaultIndexQueueSize = 4096
+
+func normalizeWorkers(workers int) int {
+	if workers > 0 {
+		return workers
 	}
+	workers = runtime.GOMAXPROCS(0)
+	if workers > 8 {
+		workers = 8
+	}
+	if workers < 2 {
+		workers = 2
+	}
+	return workers
+}
+
+func newIndexPool(workers, queue int) *agilepool.Pool {
+	if queue <= 0 {
+		queue = defaultIndexQueueSize
+	}
+	return agilepool.NewPool(agilepool.NewConfig(
+		agilepool.WithWorkerNumCapacity(int64(normalizeWorkers(workers))),
+		agilepool.WithBlockMode(agilepool.BLOCK),
+		agilepool.WithTaskQueueSize(int64(queue)),
+		agilepool.WithStatsSamplePeriod(10*time.Millisecond),
+	))
+}
+
+// BuildIndex is the convenience entry point: create a pool, build, close it.
+// Servers should use BuildIndexWithPool with a long-lived pool instead.
+func BuildIndex(workspace string, roots []string, workers int) (*Index, error) {
+	workers = normalizeWorkers(workers)
+	pool := newIndexPool(workers, defaultIndexQueueSize)
+	idx, err := BuildIndexWithPool(workspace, roots, workers, pool)
+	pool.Close()
+	return idx, err
+}
+
+// BuildIndexWithPool builds an index using an existing pool. It waits for all
+// submitted parse tasks but does not close the pool; the caller owns its
+// lifecycle.
+func BuildIndexWithPool(workspace string, roots []string, workers int, pool *agilepool.Pool) (*Index, error) {
+	if pool == nil {
+		return nil, fmt.Errorf("nil index pool")
+	}
+	workers = normalizeWorkers(workers)
+
 	files, err := collectFiles(roots)
 	if err != nil {
 		return nil, err
@@ -166,12 +203,6 @@ func BuildIndex(workspace string, roots []string, workers int) (*Index, error) {
 	start := time.Now()
 	results := make([]*Document, len(files))
 	var errors atomic.Int64
-	pool := agilepool.NewPool(agilepool.NewConfig(
-		agilepool.WithWorkerNumCapacity(int64(workers)),
-		agilepool.WithBlockMode(agilepool.BLOCK),
-		agilepool.WithTaskQueueSize(int64(len(files)+1)),
-		agilepool.WithStatsSamplePeriod(10*time.Millisecond),
-	))
 	for i, path := range files {
 		i, path := i, path
 		pool.Submit(agilepool.TaskFunc(func() error {
@@ -186,7 +217,6 @@ func BuildIndex(workspace string, roots []string, workers int) (*Index, error) {
 		}))
 	}
 	pool.Wait()
-	pool.Close()
 
 	x := &Index{
 		Workspace: workspace,

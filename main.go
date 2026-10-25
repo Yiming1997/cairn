@@ -40,7 +40,9 @@ func main() {
 		log.Fatalf("workspace is not a directory: %s", abs)
 	}
 
-	app := NewApp(abs, []string{abs}, *workers)
+	pool := newIndexPool(*workers, defaultIndexQueueSize)
+	app := NewApp(abs, []string{abs}, *workers, pool)
+	defer app.Close()
 	log.SetOutput(os.Stderr)
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 

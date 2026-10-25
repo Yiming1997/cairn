@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	agilepool "github.com/Yiming1997/agilePool/v2"
 )
 
 const serverInstructions = `Cairn is a local index of the workspace's code and documents. Use mcp__cairn__symbols to find definitions, mcp__cairn__search to find relevant chunks, mcp__cairn__refs for text-level references, and mcp__cairn__outline for a file or package structure. Prefer one of these over reading many files or running repeated grep loops. Call index to rebuild after large changes; status shows index coverage.`
@@ -17,19 +19,32 @@ type App struct {
 	workspace string
 	roots     []string
 	workers   int
+	pool      *agilepool.Pool
 
 	indexMu sync.Mutex
 	mu      sync.RWMutex
 	idx     *Index
+	closed  bool
 }
 
-func NewApp(workspace string, roots []string, workers int) *App {
-	return &App{workspace: workspace, roots: roots, workers: workers}
+func NewApp(workspace string, roots []string, workers int, pool *agilepool.Pool) *App {
+	workers = normalizeWorkers(workers)
+	if pool == nil {
+		pool = newIndexPool(workers, defaultIndexQueueSize)
+	}
+	return &App{workspace: workspace, roots: roots, workers: workers, pool: pool}
 }
 
 func (a *App) rebuild(paths []string) (*Index, error) {
 	a.indexMu.Lock()
 	defer a.indexMu.Unlock()
+
+	a.mu.RLock()
+	closed := a.closed
+	a.mu.RUnlock()
+	if closed {
+		return nil, fmt.Errorf("app is closed")
+	}
 
 	roots := a.roots
 	if len(paths) > 0 {
@@ -45,7 +60,7 @@ func (a *App) rebuild(paths []string) (*Index, error) {
 			roots = append(roots, abs)
 		}
 	}
-	idx, err := BuildIndex(a.workspace, roots, a.workers)
+	idx, err := BuildIndexWithPool(a.workspace, roots, a.workers, a.pool)
 	if err != nil {
 		return nil, err
 	}
@@ -53,6 +68,24 @@ func (a *App) rebuild(paths []string) (*Index, error) {
 	a.idx = idx
 	a.mu.Unlock()
 	return idx, nil
+}
+
+// Close waits for the current rebuild (if any), drains the shared pool, and
+// closes it. It is safe to call once at the end of the process.
+func (a *App) Close() {
+	a.indexMu.Lock()
+	defer a.indexMu.Unlock()
+
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return
+	}
+	a.closed = true
+	a.mu.Unlock()
+
+	a.pool.Wait()
+	a.pool.Close()
 }
 
 func (a *App) current() *Index {
