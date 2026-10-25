@@ -56,3 +56,40 @@ func New(c Config) *Config { return &c }
 		t.Fatal("refs returned no results")
 	}
 }
+
+func TestSharedPoolRebuild(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "hello.txt"), []byte("hello cairn\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pool := newIndexPool(2, 64)
+	defer func() {
+		pool.Wait()
+		pool.Close()
+	}()
+
+	for i := 0; i < 3; i++ {
+		idx, err := BuildIndexWithPool(dir, []string{dir}, 2, pool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if idx.Files != 1 || idx.Chunks == 0 {
+			t.Fatalf("build %d: files=%d chunks=%d", i, idx.Files, idx.Chunks)
+		}
+	}
+}
+
+func TestAppRebuildAfterClose(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "hello.txt"), []byte("hello cairn\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp(dir, []string{dir}, 2, nil)
+	if _, err := app.rebuild(nil); err != nil {
+		t.Fatal(err)
+	}
+	app.Close()
+	if _, err := app.rebuild(nil); err == nil {
+		t.Fatal("rebuild after Close should fail")
+	}
+}
