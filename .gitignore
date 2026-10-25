@@ -1,0 +1,20 @@
+# binaries
+cairn
+cairn.exe
+*.exe
+*.test
+
+# Go
+coverage.out
+coverage.html
+*.prof
+
+# editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# local data
+.cairn/
+*.log

@@ -1,0 +1,19 @@
+# Example: mount Cairn in DSH.
+#
+# Copy this entry into your DSH profile's cordis.patch.yml.
+# Replace the absolute paths with the locations on your machine.
+- insert:
+    - id: cairn
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        serverName: cairn
+        transport: stdio
+        command: D:/code/github/cairn/cairn.exe
+        args:
+          - --workspace
+          - D:/code/github
+          - --workers
+          - "4"
+        cwd: D:/code/github
+        toolCallTimeoutMs: 30000
+        failOnStartupError: false
